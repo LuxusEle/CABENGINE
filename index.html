@@ -13,6 +13,9 @@
           extend: {
             colors: {
               slate: {
+                50: '#f8fafc',
+                100: '#f1f5f9',
+                200: '#e2e8f0',
                 850: '#151F32',
                 900: '#0F172A',
                 950: '#020617',
@@ -48,7 +51,23 @@
         overscroll-behavior-y: none;
         -webkit-tap-highlight-color: transparent;
       }
-      /* Hide scrollbar for cleaner UI */
+      /* Custom Scrollbar for Desktop feel in Excel mode */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #475569; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b; 
+      }
+      
+      /* Utilities */
       .no-scrollbar::-webkit-scrollbar {
         display: none;
       }
@@ -56,9 +75,15 @@
         -ms-overflow-style: none;
         scrollbar-width: none;
       }
+      
+      input[type=number]::-webkit-inner-spin-button, 
+      input[type=number]::-webkit-outer-spin-button { 
+        -webkit-appearance: none; 
+        margin: 0; 
+      }
     </style>
   </head>
-  <body class="bg-slate-950 text-slate-100 h-screen w-screen overflow-hidden selection:bg-amber-500/30">
+  <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 h-screen w-screen overflow-hidden selection:bg-amber-500/30 transition-colors duration-200">
     <div id="root" class="h-full w-full"></div>
   </body>
 </html>

@@ -16,85 +16,113 @@ const HW = {
 const STD_WIDTHS = [900, 600, 500, 450, 400, 300];
 
 export const autoFillZone = (zone: Zone): Zone => {
-  // 1. Sort obstacles
-  const sortedObs = [...zone.obstacles].sort((a, b) => a.fromLeft - b.fromLeft);
-  
-  // 2. Calculate existing cabinet usage (linear assumption for now - user adds cabs, they flow L->R)
-  // This is tricky without explicit X positions. 
-  // STRATEGY: We will clear existing auto-filled cabs and re-calculate filling for the GAPS.
-  
+  // 1. Filter out existing auto-filled items to regenerate them
   const manualCabs = zone.cabinets.filter(c => !c.isAutoFilled);
-  const newCabinets = [...manualCabs];
+  const obstacles = zone.obstacles;
 
-  // Logic: "Fill the remainder". 
-  // We need to know where the manual cabinets *are*. 
-  // If the user hasn't positioned them, we assume manual cabinets come first? 
-  // OR, we just fill the END of the wall.
-  // Let's assume Manual Cabinets take up space sequentially, skipping obstacles.
+  // 2. Build a Timeline of Occupied Space
+  // We need to know where manual cabinets end up visually to calculate true gaps.
+  // Since we don't have X coordinates stored, we simulate the flow.
   
-  let currentCursor = 0;
+  interface PlacedItem {
+    start: number;
+    end: number;
+    originalIndex: number; // -1 for obstacle
+    type: 'cabinet' | 'obstacle';
+  }
+
+  const placedItems: PlacedItem[] = [];
   
-  // Advance cursor past manual cabinets + obstacles
-  // Note: This is a simplification. A real solver would need drag-and-drop.
-  // For this MVP, "Auto Fill" just adds cabinets to fill the *remaining* length of the wall 
-  // assuming all current items are packed to the left.
+  // Sort obstacles
+  const sortedObs = [...obstacles].sort((a, b) => a.fromLeft - b.fromLeft);
   
-  // Calculate total used width (taking max of obstacle overlap into account is hard purely numerically)
-  // Let's rely on the Gap Finder.
-  
-  // Define Gaps: 0 -> Length. Subtract Obstacles. Subtract Manual Cabs.
-  // This is complex. Let's simplify:
-  // Auto-fill simply appends cabinets to the end of the list until total width ~= zone length.
-  
-  let occupiedWidth = 0;
-  zone.cabinets.forEach(c => occupiedWidth += c.width);
-  zone.obstacles.forEach(o => occupiedWidth += o.width); // Very rough, assumes no overlap
-  
-  // Better approach for "Line Draw":
-  // We simulate the flow.
-  let x = 0;
-  // We can't easily interleave without position data. 
-  // We will just append cabinets that fit the remaining raw math space.
-  
-  let remaining = zone.totalLength - occupiedWidth;
-  
-  // Safety buffer
-  if (remaining < 300) return zone; // Too small to fill
-  
-  const filledCabs: CabinetUnit[] = [];
-  
-  while (remaining >= 300) {
-    // Find best fit
-    const width = STD_WIDTHS.find(w => w <= remaining) || remaining;
-    
-    // Create cab
-    if (width >= 300) {
-      filledCabs.push({
-        id: uuid(),
-        preset: PresetType.BASE_DOOR,
-        type: CabinetType.BASE,
-        width: width,
-        qty: 1,
-        isAutoFilled: true
-      });
-      remaining -= width;
-    } else {
-      // Filler
-      filledCabs.push({
-        id: uuid(),
-        preset: PresetType.FILLER,
-        type: CabinetType.BASE,
-        width: remaining,
-        qty: 1,
-        isAutoFilled: true
-      });
-      remaining = 0;
+  // Add obstacles to timeline
+  sortedObs.forEach(obs => {
+    placedItems.push({ start: obs.fromLeft, end: obs.fromLeft + obs.width, originalIndex: -1, type: 'obstacle' });
+  });
+
+  // Flow manual cabinets to find their positions
+  let cursor = 0;
+  manualCabs.forEach((cab, idx) => {
+    // Determine position based on obstacles
+    let isClear = false;
+    while (!isClear) {
+      isClear = true;
+      for (const obs of sortedObs) {
+        // Overlap check
+        if (cursor >= obs.fromLeft && cursor < (obs.fromLeft + obs.width)) {
+          cursor = obs.fromLeft + obs.width;
+          isClear = false;
+        } else if (cursor < obs.fromLeft && (cursor + cab.width) > obs.fromLeft) {
+             cursor = obs.fromLeft + obs.width;
+             isClear = false;
+        }
+      }
     }
+    placedItems.push({ start: cursor, end: cursor + cab.width, originalIndex: idx, type: 'cabinet' });
+    cursor += cab.width;
+  });
+
+  // Sort all items by start position to find gaps between them
+  placedItems.sort((a, b) => a.start - b.start);
+
+  // 3. Find Gaps and Generate Auto Cabinets
+  const newCabinetList: CabinetUnit[] = [];
+  let currentPos = 0;
+
+  // We iterate through the timeline.
+  // If we find a gap, we fill it with auto-cabinets.
+  // If we find a manual cabinet, we push it to the list.
+  
+  // Helper to fill a gap
+  const fillGap = (start: number, end: number) => {
+    let remaining = end - start;
+    if (remaining < 300) {
+      if(remaining > 0) {
+         // Tiny gap filler
+         newCabinetList.push({ id: uuid(), preset: PresetType.FILLER, type: CabinetType.BASE, width: remaining, qty: 1, isAutoFilled: true });
+      }
+      return;
+    }
+
+    while (remaining >= 300) {
+      const width = STD_WIDTHS.find(w => w <= remaining) || remaining;
+      
+      if (width >= 300) {
+        // Add Base
+        newCabinetList.push({ id: uuid(), preset: PresetType.BASE_DOOR, type: CabinetType.BASE, width: width, qty: 1, isAutoFilled: true });
+        // Add Wall
+        newCabinetList.push({ id: uuid(), preset: PresetType.WALL_STD, type: CabinetType.WALL, width: width, qty: 1, isAutoFilled: true });
+        remaining -= width;
+      } else {
+        newCabinetList.push({ id: uuid(), preset: PresetType.FILLER, type: CabinetType.BASE, width: remaining, qty: 1, isAutoFilled: true });
+        remaining = 0;
+      }
+    }
+  };
+
+  placedItems.forEach(item => {
+    // Gap before this item?
+    if (item.start > currentPos) {
+      fillGap(currentPos, item.start);
+    }
+    
+    // If it's a cabinet, add it to list
+    if (item.type === 'cabinet') {
+      newCabinetList.push(manualCabs[item.originalIndex]);
+    }
+    
+    currentPos = Math.max(currentPos, item.end);
+  });
+
+  // Final gap after last item
+  if (currentPos < zone.totalLength) {
+    fillGap(currentPos, zone.totalLength);
   }
 
   return {
     ...zone,
-    cabinets: [...manualCabs, ...filledCabs]
+    cabinets: newCabinetList
   };
 };
 
